@@ -3,6 +3,7 @@
 #include<windows.h>
 #include<WinSock2.h>
 #include<stdio.h>
+#include<thread>
 
 #pragma comment(lib,"ws2_32.lib")
 
@@ -12,13 +13,16 @@ enum CMD
 	CMD_LOGIN_RESULT,
 	CMD_LOGOUT,
 	CMD_LOGOUT_RESULT,
+	CMD_NEW_USER_JOIN,
 	CMD_ERROR
 };
+
 struct DataHeader
 {
 	short dataLength;
 	short cmd;
 };
+
 //DataPackage
 struct Login : public DataHeader
 {
@@ -57,12 +61,91 @@ struct LogoutResult : public DataHeader
 	LogoutResult()
 	{
 		dataLength = sizeof(LogoutResult);
-		cmd = CMD_LOGIN_RESULT;
+		cmd = CMD_LOGOUT_RESULT;
 		result = 0;
 	}
 	int result;
 };
 
+struct NewUserJoin : public DataHeader
+{
+	NewUserJoin()
+	{
+		dataLength = sizeof(NewUserJoin);
+		cmd = CMD_NEW_USER_JOIN;
+		scok = 0;
+	}
+	int scok;
+};
+
+int processor(SOCKET _cSock)
+{
+	//缓冲区
+	char szRecv[4096] = {};
+	// 5 接收客户端数据
+	int nLen = recv(_cSock, szRecv, sizeof(DataHeader), 0);
+	DataHeader* header = (DataHeader*)szRecv;
+	if (nLen <= 0)
+	{
+		printf("与服务器断开连接，任务结束。\n", _cSock);
+		return -1;
+	}
+	switch (header->cmd)
+	{
+		case CMD_LOGIN_RESULT:
+		{
+			recv(_cSock, szRecv + sizeof(DataHeader), header->dataLength - sizeof(DataHeader), 0);
+			LoginResult* login = (LoginResult*)szRecv;
+			printf("收到服务端消息：CMD_LOGIN_RESULT,数据长度：%d\n", login->dataLength);
+		}
+		break;
+		case CMD_LOGOUT_RESULT:
+		{
+			recv(_cSock, szRecv + sizeof(DataHeader), header->dataLength - sizeof(DataHeader), 0);
+			LogoutResult* logout = (LogoutResult*)szRecv;
+			printf("收到服务端消息：CMD_LOGOUT_RESULT,数据长度：%d\n", logout->dataLength);
+		}
+		break;
+		case CMD_NEW_USER_JOIN:
+		{
+			recv(_cSock, szRecv + sizeof(DataHeader), header->dataLength - sizeof(DataHeader), 0);
+			NewUserJoin* userJoin = (NewUserJoin*)szRecv;
+			printf("收到服务端消息：CMD_NEW_USER_JOIN,数据长度：%d\n", _cSock, userJoin->dataLength);
+		}
+		break;
+	}
+}
+bool g_bRun = true;
+void cmdThread(SOCKET sock)
+{
+	while (true)
+	{
+		char cmdBuf[256] = {};
+		scanf("%s", cmdBuf);
+		if (0 == strcmp(cmdBuf, "exit"))
+		{
+			g_bRun = false;
+			printf("退出cmdThread线程\n");
+			break;
+		}
+		else if (0 == strcmp(cmdBuf, "login"))
+		{
+			Login login;
+			strcpy(login.userName, "lyd");
+			strcpy(login.PassWord, "lydmm");
+			send(sock, (const char*)&login, sizeof(Login), 0);
+		}
+		else if (0 == strcmp(cmdBuf, "logout"))
+		{
+			Logout logout;
+			strcpy(logout.userName, "lyd");
+			send(sock, (const char*)&logout, sizeof(Logout), 0);
+		}
+		else {
+			printf("不支持的命令。\n");
+		}
+	}
+}
 
 int main()
 {
@@ -73,7 +156,7 @@ int main()
 	//------------
 	//-- 用Socket API建立简易TCP客户端
 	// 1 建立一个socket
-	SOCKET _sock = socket(AF_INET, SOCK_STREAM, 0);//创建TCP链接 返回做一个整数代表连接成功与否
+	SOCKET _sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (INVALID_SOCKET == _sock)
 	{
 		printf("错误，建立Socket失败...\n");
@@ -83,11 +166,10 @@ int main()
 	}
 	// 2 连接服务器 connect
 	sockaddr_in _sin = {};
-	_sin.sin_family = AF_INET;//AF_INET是 IPv4 网络协议的套接字类型，AF_INET6 则是 IPv6
-	_sin.sin_port = htons(4567);//端口号
-	_sin.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");//inet_addr()的功能是将一个点分十进制的IP转换成一个长整数型数（u_long类型）
-
-	int ret  = connect(_sock, (sockaddr*)&_sin, sizeof(sockaddr_in));//建立TCP链接，其套接字结构体的地址长度必须由第三个参数指定
+	_sin.sin_family = AF_INET;
+	_sin.sin_port = htons(4567);
+	_sin.sin_addr.S_un.S_addr = inet_addr("127.0.0.1");
+	int ret  = connect(_sock, (sockaddr*)&_sin, sizeof(sockaddr_in));
 	if (SOCKET_ERROR == ret)
 	{
 		printf("错误，连接服务器失败...\n");
@@ -95,48 +177,42 @@ int main()
 	else {
 		printf("连接服务器成功...\n");
 	}
+	//启动线程
+	std::thread t1(cmdThread,_sock);
+	t1.detach();//线程为分离状态
 
-	
-	while (true)
+	while (g_bRun)
 	{
-		//3输入请求命令
-		char cmdBuf[128] = {};
-		scanf("%s",cmdBuf);
-		//4 处理请求命令
-		if (0 == strcmp(cmdBuf, "exit"))
+		fd_set fdReads;
+		FD_ZERO(&fdReads);
+		FD_SET(_sock, &fdReads);
+		timeval t = {1,0};//1s
+		int ret = select(_sock, &fdReads, 0, 0, &t);//1s之内如果没有检测到fdReads函数那么就返回 服务器是非阻塞模型
+		if (ret < 0)
 		{
-			printf("收到exit命令，任务结束。\n");
+			printf("select任务结束1\n");
 			break;
-		}else if (0 == strcmp(cmdBuf, "login")) {
-			//5 向服务器发送请求命令
-			Login login;
-			strcpy(login.userName, "lyd");
-			strcpy(login.PassWord, "lydmima");
-			send(_sock, (const char *)&login, sizeof(login), 0);//send是TCP特有的方式
-			// 接收服务器返回的数据
-			LoginResult loginRet = {};
-			recv(_sock, (char*)&loginRet, sizeof(loginRet), 0);//recv也是TCP的方式
-			printf("LoginResult: %d \n", loginRet.result);
 		}
-		else if (0 == strcmp(cmdBuf, "logout")) {
-			Logout logout;
-			strcpy(logout.userName, "lyd");
-			//5 向服务器发送请求命令
-			send(_sock, (const char *)&logout, sizeof(logout), 0);
-			// 接收服务器返回的数据
-			LogoutResult logoutRet = {};
-			recv(_sock, (char*)&logoutRet, sizeof(logoutRet), 0);
-			printf("LogoutResult: %d \n", logoutRet.result);
+		if (FD_ISSET(_sock, &fdReads))//判断标志位
+		{
+			FD_CLR(_sock, &fdReads);//标志位清0
+
+			if (-1 == processor(_sock))
+			{
+				printf("select任务结束2\n");
+				break;
+			}
 		}
-		else {
-			printf("不支持的命令，请重新输入。\n");
-		}
+
+		printf("空闲时间处理其它业务..\n");
+
+		Sleep(1000);
 	}
 	// 7 关闭套节字closesocket
 	closesocket(_sock);
 	//清除Windows socket环境
 	WSACleanup();
-	printf("已退出。");
+	printf("已退出。\n");
 	getchar();
 	return 0;
 }
