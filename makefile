@@ -11,7 +11,8 @@ SRCS = client.cpp \
 INC = -I./EasyTcpClient -I./MessageHeader
  
 OBJS = $(SRCS:.cpp=.o)
- 
+
+#注意由于引入了线程库 因此生成.o文件和链接文件 都需要添加线程头文件
 $(TARGET):$(OBJS)
 #	@echo TARGET:$@
 #	@echo OBJECTS:$^
@@ -20,5 +21,6 @@ $(TARGET):$(OBJS)
 clean:
 	rm -rf $(TARGET) $(OBJS)
  
+#注意由于引入了线程库 因此生成.o文件和链接文件 都需要添加线程头文件
 %.o:%.cpp
 	$(CC)  $(INC) -o $@ -c $< $(CFLAGS)
